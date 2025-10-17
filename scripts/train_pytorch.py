@@ -41,6 +41,8 @@ import tqdm
 import wandb
 
 import openpi.models.pi0_config
+import openpi.models_pytorch.diffusion_config
+import openpi.models_pytorch.diffusion
 import openpi.models_pytorch.pi0_pytorch
 import openpi.shared.normalize as _normalize
 import openpi.training.config as _config
@@ -390,7 +392,7 @@ def train_loop(config: _config.TrainConfig):
         logging.info("Cleared sample batch and data loader from memory")
 
     # Build model
-    if not isinstance(config.model, openpi.models.pi0_config.Pi0Config):
+    if not isinstance(config.model, (openpi.models.pi0_config.Pi0Config, openpi.models_pytorch.diffusion_config.DiffusionConfig)):
         # Convert dataclass to Pi0Config if needed
         model_cfg = openpi.models.pi0_config.Pi0Config(
             dtype=config.pytorch_training_precision,
@@ -406,7 +408,10 @@ def train_loop(config: _config.TrainConfig):
         # Update dtype to match pytorch_training_precision
         object.__setattr__(model_cfg, "dtype", config.pytorch_training_precision)
 
-    model = openpi.models_pytorch.pi0_pytorch.PI0Pytorch(model_cfg).to(device)
+    if isinstance(model_cfg, openpi.models_pytorch.diffusion_config.DiffusionConfig):
+        model = openpi.models_pytorch.diffusion.DiffusionPolicy(model_cfg).to(device)
+    else:
+        model = openpi.models_pytorch.pi0_pytorch.PI0Pytorch(model_cfg).to(device)
 
     if hasattr(model, "gradient_checkpointing_enable"):
         enable_gradient_checkpointing = True
