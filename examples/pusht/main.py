@@ -12,6 +12,7 @@ import time
 import datetime
 import imageio
 import pandas as pd
+import json
 from openpi_client import websocket_client_policy as _websocket_client_policy
 
 TASK = "Push the T-shaped block onto the T-shaped target."
@@ -75,6 +76,11 @@ def eval_pusht(args: Args):
     
     env = gym.make("gym_pusht/PushT-v0", render_mode="rgb_array", obs_type="pixels_agent_pos")
     client = _websocket_client_policy.WebsocketClientPolicy(args.host, args.port)
+    meta_data = client.get_server_metadata()
+    
+    meta_file_path = log_dir / "meta.json"
+    with open(meta_file_path, "w") as f:
+        json.dump(meta_data, f, indent=4)
     
     video_dir = log_dir / "videos"
     video_dir.mkdir(parents=True, exist_ok=True)
