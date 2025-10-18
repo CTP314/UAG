@@ -98,7 +98,10 @@ def create_policy(args: Args) -> _policy.Policy:
 
 def main(args: Args) -> None:
     policy = create_policy(args)
-    policy_metadata = policy.metadata
+    policy_metadata = {
+        **policy.metadata,
+        "checkpoint": dataclasses.asdict(args.policy),
+    }
 
     # Record the policy's behavior.
     if args.record:

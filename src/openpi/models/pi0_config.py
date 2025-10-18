@@ -1,4 +1,5 @@
 import dataclasses
+import logging
 from typing import TYPE_CHECKING
 
 import flax.nnx as nnx
@@ -10,10 +11,12 @@ from openpi.models import model as _model
 import openpi.models.gemma as _gemma
 from openpi.shared import array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
+import safetensors.torch
 
 if TYPE_CHECKING:
     from openpi.models.pi0 import Pi0
 
+logger = logging.getLogger("openpi")
 
 @dataclasses.dataclass(frozen=True)
 class Pi0Config(_model.BaseModelConfig):
@@ -50,6 +53,13 @@ class Pi0Config(_model.BaseModelConfig):
         from openpi.models.pi0 import Pi0
 
         return Pi0(self, rngs=nnx.Rngs(rng))
+
+    def load_pytorch(self, train_config, weight_path: str):
+        from openpi.models_pytorch import pi0_pytorch
+        logger.info(f"train_config: {train_config}")
+        model = pi0_pytorch.PI0Pytorch(config=train_config.model)
+        safetensors.torch.load_model(model, weight_path)
+        return model
 
     @override
     def inputs_spec(self, *, batch_size: int = 1) -> tuple[_model.Observation, _model.Actions]:

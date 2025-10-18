@@ -4,8 +4,12 @@ import jax.numpy as jnp
 from typing_extensions import override
 from openpi.models import model as _model
 import openpi.shared.array_typing as at
+import logging
+import safetensors.torch
 
 import lerobot.configs.types as _types
+
+logger = logging.getLogger("openpi")
 
 @dataclasses.dataclass(frozen=True)
 class DiffusionConfig(_model.BaseModelConfig):
@@ -87,3 +91,10 @@ class DiffusionConfig(_model.BaseModelConfig):
             type=_types.FeatureType.ACTION,
             shape=(self.action_dim,),
         )
+    
+    def load_pytorch(self, train_config, weight_path: str):
+        from openpi.models_pytorch import diffusion
+        logger.info(f"train_config: {train_config}")
+        model = diffusion.DiffusionPolicy(config=train_config.model)
+        safetensors.torch.load_model(model, weight_path)
+        return model

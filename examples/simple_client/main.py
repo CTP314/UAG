@@ -21,6 +21,7 @@ class EnvMode(enum.Enum):
     ALOHA_SIM = "aloha_sim"
     DROID = "droid"
     LIBERO = "libero"
+    PUSHT = "pusht"
 
 
 @dataclasses.dataclass
@@ -120,6 +121,7 @@ def main(args: Args) -> None:
         EnvMode.ALOHA_SIM: _random_observation_aloha,
         EnvMode.DROID: _random_observation_droid,
         EnvMode.LIBERO: _random_observation_libero,
+        EnvMode.PUSHT: _random_observation_pusht,
     }[args.env]
 
     policy = _websocket_client_policy.WebsocketClientPolicy(
@@ -180,7 +182,13 @@ def _random_observation_libero() -> dict:
         "observation/wrist_image": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
         "prompt": "do something",
     }
-
+    
+def _random_observation_pusht() -> dict:
+    return {
+        "observation/state": np.random.rand(2),
+        "observation/image": np.random.randint(256, size=(96, 96, 3), dtype=np.uint8),
+        "prompt": "Push the T-shaped block onto the T-shaped target.",
+    }
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

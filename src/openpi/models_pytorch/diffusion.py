@@ -110,6 +110,9 @@ class DiffusionPolicy(nn.Module):
         else:
             self.num_inference_steps = config.num_inference_steps
        
+    def to_bfloat16_for_selected_params(self, dtype):
+        ...
+       
     def _preprocess_observation(self, observation, *, train=True):
         """Helper method to preprocess observation."""
         observation = _preprocessing.preprocess_observation_pytorch(
@@ -202,4 +205,51 @@ class DiffusionPolicy(nn.Module):
             raise NotImplementedError("Masking loss for padding is not implemented yet.")
         
         return loss.mean()
+
+    def sample_noise(self, shape, device):
+        return torch.normal(
+            mean=0.0,
+            std=1.0,
+            size=shape,
+            dtype=torch.float32,
+            device=device,
+        )
+
+    def sample_actions(self, device, observation, noise=None, num_steps=10) -> Tensor:
+        bsize = observation.state.shape[0]
+        if noise is None:
+            action_shape = (bsize, self.config.action_horizon, self.config.action_dim)
+            noise = self.sample_noise(action_shape, device)
+            
+        images, img_masks, lang_tokens, lang_masks, state = self._preprocess_observation(observation, train=True)
+        global_cond = self._prepare_global_conditioning(
+            images=images,
+            img_masks=img_masks,
+            lang_tokens=lang_tokens,
+            lang_masks=lang_masks,
+            state=state,
+        )
+        global_cond = global_cond.to(get_dtype_from_parameters(self.unet))
+        x = self.conditional_sample(
+            noisy_actions=noise,
+            global_cond=global_cond,
+            generator=torch.Generator(device=device)
+        )
+        return x
         
+    def conditional_sample(
+        self,
+        noisy_actions: Tensor,
+        global_cond: Tensor | None,
+        generator: torch.Generator | None = None,
+    ) -> Tensor:
+        sample = noisy_actions
+        self.noise_scheduler.set_timesteps(self.num_inference_steps)
+        for t in self.noise_scheduler.timesteps:
+            model_output = self.unet(
+                sample,
+                torch.full(sample.shape[:1], t, device=sample.device, dtype=torch.long),
+                global_cond=global_cond,
+            )
+            sample = self.noise_scheduler.step(model_output, t, sample, generator=generator).prev_sample
+        return sample

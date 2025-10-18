@@ -122,6 +122,9 @@ class PI0Pytorch(nn.Module):
                 raise ValueError(msg)
         except ImportError:
             raise ValueError(msg) from None
+        
+    def to_bfloat16_for_selected_params(self, dtype):
+        self.paligemma_with_expert.to_bfloat16_for_selected_params(dtype)
 
     def gradient_checkpointing_enable(self):
         """Enable gradient checkpointing for memory optimization."""
