@@ -34,6 +34,7 @@ class ModelType(enum.Enum):
     PI0_FAST = "pi0_fast"
     PI05 = "pi05"
     DIFFUSION = "diffusion"
+    UAG = "uag"
 
 
 # The model always expects these images
