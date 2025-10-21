@@ -42,6 +42,7 @@ class GatedDeltaNetForRecurrentDiffusion(GatedDeltaNetPreTrainedModel):
         input_dim: int,
         diffusion_step_embed_dim: int,
         global_cond_dim: int = 0,
+        use_linear_cond_proj: bool = True,
     ):
         super().__init__(config)
         self.config = config
@@ -51,9 +52,27 @@ class GatedDeltaNetForRecurrentDiffusion(GatedDeltaNetPreTrainedModel):
         self.uncond_dim = diffusion_step_embed_dim
         self.input_proj = DiffusionMLP(input_dim, config.hidden_size)
         
-        self.hidden_cond_proj = DiffusionMLP(config.hidden_size + self.cond_dim, config.hidden_size)
-        self.hidden_uncond_proj = DiffusionMLP(config.hidden_size + self.uncond_dim, config.hidden_size)
-        
+        # self.hidden_cond_proj = DiffusionMLP(config.hidden_size + self.cond_dim, config.hidden_size)
+        # self.hidden_uncond_proj = DiffusionMLP(config.hidden_size + self.uncond_dim, config.hidden_size)
+        if use_linear_cond_proj:
+            self.hidden_cond_projs = nn.ModuleList(
+                nn.Linear(config.hidden_size + self.cond_dim, config.hidden_size)
+                for _ in range(config.num_hidden_layers)
+            )
+            self.hidden_uncond_projs = nn.ModuleList(
+                nn.Linear(config.hidden_size + self.uncond_dim, config.hidden_size)
+                for _ in range(config.num_hidden_layers)
+            )
+        else:
+            self.hidden_cond_projs = nn.ModuleList(
+                DiffusionMLP(config.hidden_size + self.cond_dim, config.hidden_size)
+                for _ in range(config.num_hidden_layers)
+            )
+            self.hidden_uncond_projs = nn.ModuleList(
+                DiffusionMLP(config.hidden_size + self.uncond_dim, config.hidden_size)
+                for _ in range(config.num_hidden_layers)
+            )
+
         self.layers = nn.ModuleList([GatedDeltaNetBlock(config, layer_idx) for layer_idx in range(config.num_hidden_layers)])
         
         self.gradient_checkpointing = False
@@ -94,21 +113,21 @@ class GatedDeltaNetForRecurrentDiffusion(GatedDeltaNetPreTrainedModel):
         
         if global_cond_mask is not None:
             global_cond_mask = global_cond_mask.unsqueeze(-1).to(hidden_states.dtype)
-        
-        for layer in self.layers:
+
+        for layer_idx, layer in enumerate(self.layers):
             if global_cond_mask is None and global_cond is not None:
                 hidden_states_cond_input = torch.cat([
                     hidden_states,
                     timesteps_emb,
                     global_cond
                 ], dim=-1)
-                hidden_states = self.hidden_cond_proj(hidden_states_cond_input)
+                hidden_states = self.hidden_cond_projs[layer_idx](hidden_states_cond_input)
             else:
                 hidden_states_uncond_input = torch.cat([
                     hidden_states,
                     timesteps_emb
                 ], dim=-1)
-                hidden_states_uncond_output = self.hidden_uncond_proj(hidden_states_uncond_input)
+                hidden_states_uncond_output = self.hidden_uncond_projs[layer_idx](hidden_states_uncond_input)
                 if global_cond is not None:
                     assert global_cond_mask is not None, "global_cond_mask must be provided when global_cond is used"
                     hidden_states_cond_input = torch.cat([
@@ -116,7 +135,7 @@ class GatedDeltaNetForRecurrentDiffusion(GatedDeltaNetPreTrainedModel):
                         timesteps_emb,
                         global_cond
                     ], dim=-1)
-                    hidden_states_cond_output = self.hidden_cond_proj(hidden_states_cond_input)
+                    hidden_states_cond_output = self.hidden_cond_projs[layer_idx](hidden_states_cond_input)
                     hidden_states = global_cond_mask * hidden_states_cond_output + (1 - global_cond_mask) * hidden_states_uncond_output
                 else:
                     hidden_states = hidden_states_uncond_output
@@ -155,12 +174,12 @@ class GatedDeltaNetForRecurrentDiffusion(GatedDeltaNetPreTrainedModel):
         if use_cache and not isinstance(past_key_values, Cache):
             past_key_values = Cache.from_legacy_cache(past_key_values)
             
-        for layer in self.layers:
+        for layer_idx, layer in enumerate(self.layers):
             hidden_states_uncond_input = torch.cat([
                 hidden_states,
                 timesteps_emb
             ], dim=-1)
-            hidden_states_uncond_output = self.hidden_uncond_proj(hidden_states_uncond_input)
+            hidden_states_uncond_output = self.hidden_uncond_projs[layer_idx](hidden_states_uncond_input)
             
             if global_cond is not None:
                 assert global_cond_indices is not None, "global_cond_indices must be provided when global_cond is used"
@@ -176,7 +195,7 @@ class GatedDeltaNetForRecurrentDiffusion(GatedDeltaNetPreTrainedModel):
                     global_cond
                 ], dim=-1)
 
-                hidden_states_cond_output = self.hidden_cond_proj(hidden_states_cond_input)
+                hidden_states_cond_output = self.hidden_cond_projs[layer_idx](hidden_states_cond_input)
                 
                 hidden_states = torch.scatter(
                     hidden_states,

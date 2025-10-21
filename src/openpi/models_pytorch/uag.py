@@ -59,6 +59,7 @@ class UAGPolicy(nn.Module):
             input_dim=config.action_dim,
             diffusion_step_embed_dim=config.diffusion_step_embed_dim,
             global_cond_dim=global_cond_dim,
+            use_linear_cond_proj=config.use_linear_cond_proj,
         )
         if self.config.dtype == "bfloat16":
             self.model.to(dtype=torch.bfloat16)

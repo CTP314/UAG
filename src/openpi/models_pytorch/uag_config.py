@@ -35,6 +35,7 @@ class UAGConfig(_model.BaseModelConfig):
     num_heads: int = 4
     head_dim: int = 128
     hidden_size: int = 1024
+    use_linear_cond_proj: bool = True
     
     diffusion_step_embed_dim: int = 128
     

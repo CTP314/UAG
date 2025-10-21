@@ -536,6 +536,7 @@ _CONFIGS = [
             decay_steps=200_000,
             decay_lr=0,
         ),
+        save_interval=10_000,
     ),
     #
     # ALOHA Sim configs. This config is used to demonstrate how to train on a simple simulated environment.
