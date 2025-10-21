@@ -198,7 +198,7 @@ class GatedDeltaNetForRecurrentDiffusion(GatedDeltaNetPreTrainedModel):
                 hidden_states_cond_output = self.hidden_cond_projs[layer_idx](hidden_states_cond_input)
                 
                 hidden_states = torch.scatter(
-                    hidden_states,
+                    hidden_states_uncond_output,
                     1,
                     indices_h,
                     hidden_states_cond_output,

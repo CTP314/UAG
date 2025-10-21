@@ -11,8 +11,7 @@ from lerobot.common.policies.diffusion.modeling_diffusion import (
 import openpi.models_pytorch.preprocessing_pytorch as _preprocessing
 
 from openpi.models_pytorch.encoder import DiffusionRgbEncoder
-from openpi.models_pytorch.recurrent_diffusion import GatedDeltaNetForRecurrentDiffusion
-from fla.models.gated_deltanet.modeling_gated_deltanet import GatedDeltaNetConfig
+from openpi.models_pytorch.recurrent_diffusion import GatedDeltaNetForRecurrentDiffusion, GatedDeltaNetConfig
 
 def get_dtype_from_parameters(module: nn.Module) -> torch.dtype:
     """Get a module's parameter dtype by checking one of its parameters.
