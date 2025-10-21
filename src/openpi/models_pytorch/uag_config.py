@@ -53,6 +53,7 @@ class UAGConfig(_model.BaseModelConfig):
 
     # Training Strategy
     cond_sample_mode: str = "sparse"  # "full" or "sparse"
+    max_cond_offset: int = 0 # only used if cond_sample_mode is "sparse"
 
     @property
     @override
@@ -89,8 +90,9 @@ class UAGConfig(_model.BaseModelConfig):
         return observation_spec, action_specW
     
     def load_pytorch(self, train_config, weight_path: str):
-        from openpi.models_pytorch import diffusion
+        from openpi.models_pytorch import uag
         logger.info(f"train_config: {train_config}")
-        model = diffusion.DiffusionPolicy(config=train_config.model)
+        model = uag.UAGPolicy(config=train_config.model)
         safetensors.torch.load_model(model, weight_path)
+        model.eval()
         return model

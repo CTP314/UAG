@@ -118,7 +118,7 @@ class DiffusionPolicy(nn.Module):
                 )
             global_cond_feats.append(img_features)
             
-        return torch.cat(global_cond_feats, dim=-1).flatten(start_dim=1)
+        return torch.cat(global_cond_feats, dim=-1)
         
             
     def forward(self, observation, actions, noise=None, time=None) -> Tensor:

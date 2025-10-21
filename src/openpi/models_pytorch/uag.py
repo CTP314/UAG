@@ -108,36 +108,34 @@ class UAGPolicy(nn.Module):
     ) -> Tensor:
         batch_size = state.shape[0]
         global_cond_feats = [state]
-        images_tensor = torch.stack(images, dim=0)  # (num_cameras, B, L, C, H, W)
-        n_obs_steps = images_tensor.shape[2]
+        images_tensor = torch.stack(images, dim=0)  # (num_cameras, B, C, H, W)
         
+        image_tensor_bath_shape = images_tensor.shape[1:-3]
+        images_tensor = images_tensor.reshape((images_tensor.shape[0], -1, *images_tensor.shape[-3:]))
+
         if self.config.image_features:
             if self.config.use_separate_rgb_encoder_per_camera:
-                # Combine batch and sequence dims while rearranging to make the camera index dimension first.
-                images_per_camera = einops.rearrange(images_tensor, "n b s ... -> n (b s) ...")
+                images_per_camera = images_tensor
                 img_features_list = torch.cat(
                     [
                         encoder(images)
-                        for encoder, images in zip(self.rgb_encoder, images_per_camera, strict=True)
+                        for encoder, images in zip(self.rgb_encoder, images_per_camera)
                     ]
                 )
-
-                # Separate batch and sequence dims back out. The camera index dim gets absorbed into the
-                # feature dim (effectively concatenating the camera features).
+                
                 img_features = einops.rearrange(
-                    img_features_list, "(n b s) ... -> b s (n ...)", b=batch_size, s=n_obs_steps
+                    img_features_list, "(n b) ... -> b (n ...)", b=batch_size
                 )
             else:
-                # Combine batch, sequence, and "which camera" dims before passing to shared encoder.
                 img_features = self.rgb_encoder(
-                    einops.rearrange(images_tensor, "n b s ... -> (b s n) ...")
+                    einops.rearrange(
+                        images_tensor, "n b ... -> (b n) ...", b=batch_size
+                    )
                 )
-                # Separate batch dim and sequence dim back out. The camera index dim gets absorbed into the
-                # feature dim (effectively concatenating the camera features).
                 img_features = einops.rearrange(
-                    img_features, "(b s n) ... -> b s (n ...)", b=batch_size, s=n_obs_steps
+                    img_features, "(b n) ... -> b (n ...)", b=batch_size
                 )
-            global_cond_feats.append(img_features)
+            global_cond_feats.append(img_features.reshape((*image_tensor_bath_shape, -1)))
             
         return torch.cat(global_cond_feats, dim=-1)
 
@@ -197,7 +195,7 @@ class UAGPolicy(nn.Module):
         
         if self.config.cond_sample_mode == "sparse":
             global_cond_indices = torch.randint(
-                0, actions.shape[1],
+                0, min(actions.shape[1], self.config.max_cond_offset + 1),
                 (actions.shape[0], 1),
                 device=actions.device,
             )
@@ -255,3 +253,54 @@ class UAGPolicy(nn.Module):
         loss = F.mse_loss(pred, target.to(get_dtype_from_parameters(self.model)), reduction="none")
 
         return loss.mean()
+
+    def sample_noise(self, shape, device):
+        return torch.normal(
+            mean=0.0,
+            std=1.0,
+            size=shape,
+            dtype=torch.float32,
+            device=device,
+        )
+
+    def sample_actions(self, device, observation, noise=None, num_steps=10) -> Tensor:
+        bsize = observation.state.shape[0]
+        if noise is None:
+            action_shape = (bsize, self.config.action_horizon, self.config.action_dim)
+            noise = self.sample_noise(action_shape, device)
+
+        images, img_masks, lang_tokens, lang_masks, state = self._preprocess_observation(observation, train=False)
+        global_cond = self._prepare_global_conditioning(
+            images=images,
+            img_masks=img_masks,
+            lang_tokens=lang_tokens,
+            lang_masks=lang_masks,
+            state=state,
+        )
+        global_cond = global_cond.to(get_dtype_from_parameters(self.model))
+        x = self.sparse_conditional_sample(
+            noisy_actions=noise,
+            global_cond=global_cond[:, None],
+            global_cond_indices=torch.zeros((bsize, 1), dtype=torch.long, device=device),
+            generator=torch.Generator(device=device)
+        )
+        return x
+    
+    def sparse_conditional_sample(
+        self,
+        noisy_actions: Tensor,
+        global_cond: Tensor | None,
+        global_cond_indices: Tensor | None,
+        generator: torch.Generator | None = None,
+    ) -> Tensor:
+        sample = noisy_actions
+        self.noise_scheduler.set_timesteps(self.num_inference_steps)
+        for t in self.noise_scheduler.timesteps:
+            model_output, _ = self.model.forward_sparse(
+                sample,
+                torch.full(sample.shape[:2], t, device=sample.device, dtype=torch.long),
+                global_cond=global_cond,
+                global_cond_indices=global_cond_indices,
+            )
+            sample = self.noise_scheduler.step(model_output, t, sample, generator=generator).prev_sample
+        return sample
