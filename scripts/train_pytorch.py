@@ -43,6 +43,8 @@ import wandb
 import openpi.models.pi0_config
 import openpi.models_pytorch.diffusion_config
 import openpi.models_pytorch.diffusion
+import openpi.models_pytorch.uag_config
+import openpi.models_pytorch.uag
 import openpi.models_pytorch.pi0_pytorch
 import openpi.shared.normalize as _normalize
 import openpi.training.config as _config
@@ -392,7 +394,11 @@ def train_loop(config: _config.TrainConfig):
         logging.info("Cleared sample batch and data loader from memory")
 
     # Build model
-    if not isinstance(config.model, (openpi.models.pi0_config.Pi0Config, openpi.models_pytorch.diffusion_config.DiffusionConfig)):
+    if not isinstance(config.model, (
+        openpi.models.pi0_config.Pi0Config, 
+        openpi.models_pytorch.diffusion_config.DiffusionConfig,
+        openpi.models_pytorch.uag_config.UAGConfig,
+    )):
         # Convert dataclass to Pi0Config if needed
         model_cfg = openpi.models.pi0_config.Pi0Config(
             dtype=config.pytorch_training_precision,
@@ -410,6 +416,8 @@ def train_loop(config: _config.TrainConfig):
 
     if isinstance(model_cfg, openpi.models_pytorch.diffusion_config.DiffusionConfig):
         model = openpi.models_pytorch.diffusion.DiffusionPolicy(model_cfg).to(device)
+    elif isinstance(model_cfg, openpi.models_pytorch.uag_config.UAGConfig):
+        model = openpi.models_pytorch.uag.UAGPolicy(model_cfg).to(device)
     else:
         model = openpi.models_pytorch.pi0_pytorch.PI0Pytorch(model_cfg).to(device)
 

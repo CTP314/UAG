@@ -27,9 +27,13 @@ class UAGConfig(_model.BaseModelConfig):
         "base_0_rgb",
     )
     
-    num_hidden_layers: int = 18
+    # num_hidden_layers: int = 18
+    # num_heads: int = 4
+    # head_dim: int = 256
+    # hidden_size: int = 1024
+    num_hidden_layers: int = 12
     num_heads: int = 4
-    head_dim: int = 256
+    head_dim: int = 128
     hidden_size: int = 1024
     
     diffusion_step_embed_dim: int = 128
@@ -47,8 +51,8 @@ class UAGConfig(_model.BaseModelConfig):
     # Inference
     num_inference_steps: int | None = None
 
-    # Loss computation
-    do_mask_loss_for_padding: bool = False
+    # Training Strategy
+    cond_sample_mode: str = "sparse"  # "full" or "sparse"
 
     @property
     @override

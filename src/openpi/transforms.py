@@ -263,6 +263,10 @@ class TokenizePrompt(DataTransformFn):
             prompt = prompt.item()
 
         tokens, token_masks = self.tokenizer.tokenize(prompt, state)
+        if len(data["image"]["base_0_rgb"].shape) == 4:
+            L = data["image"]["base_0_rgb"].shape[0]
+            tokens = np.repeat(np.expand_dims(tokens, axis=0), L, axis=0)
+            token_masks = np.repeat(np.expand_dims(token_masks, axis=0), L, axis=0)
         return {**data, "tokenized_prompt": tokens, "tokenized_prompt_mask": token_masks}
 
 
@@ -320,7 +324,6 @@ class PromptFromLeRobotTask(DataTransformFn):
         task_index = int(data["task_index"])
         if (prompt := self.tasks.get(task_index)) is None:
             raise ValueError(f"{task_index=} not found in task mapping: {self.tasks}")
-
         return {**data, "prompt": prompt}
 
 

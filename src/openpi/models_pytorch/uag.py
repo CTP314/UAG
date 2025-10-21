@@ -14,6 +14,12 @@ from openpi.models_pytorch.encoder import DiffusionRgbEncoder
 from openpi.models_pytorch.recurrent_diffusion import GatedDeltaNetForRecurrentDiffusion
 from fla.models.gated_deltanet.modeling_gated_deltanet import GatedDeltaNetConfig
 
+def get_dtype_from_parameters(module: nn.Module) -> torch.dtype:
+    """Get a module's parameter dtype by checking one of its parameters.
+
+    Note: assumes that all parameters have the same dtype.
+    """
+    return next(iter(module.parameters())).dtype
 class UAGPolicy(nn.Module):
     def __init__(self, config: uag_config.UAGConfig):
         super().__init__()
@@ -54,6 +60,8 @@ class UAGPolicy(nn.Module):
             diffusion_step_embed_dim=config.diffusion_step_embed_dim,
             global_cond_dim=global_cond_dim,
         )
+        if self.config.dtype == "bfloat16":
+            self.model.to(dtype=torch.bfloat16)
         
         self.noise_scheduler = _make_noise_scheduler(
             config.noise_scheduler_type,
@@ -70,3 +78,180 @@ class UAGPolicy(nn.Module):
             self.num_inference_steps = self.noise_scheduler.config.num_train_timesteps
         else:
             self.num_inference_steps = config.num_inference_steps
+            
+    def to_bfloat16_for_selected_params(self, dtype):
+        ...
+
+    def _preprocess_observation(self, observation, *, train=True):
+        """Helper method to preprocess observation."""
+        observation = _preprocessing.preprocess_observation_pytorch(
+            observation, 
+            train=train,
+            image_keys=self.config.image_features,
+            image_resolution=self.config.crop_shape if self.config.crop_shape is not None else _model.IMAGE_RESOLUTION
+        )
+        return (
+            list(observation.images.values()),
+            list(observation.image_masks.values()),
+            observation.tokenized_prompt,
+            observation.tokenized_prompt_mask,
+            observation.state,
+        )
+
+    def _prepare_global_conditioning(
+        self,
+        images: list[Tensor],
+        img_masks,
+        lang_tokens,
+        lang_masks,
+        state,
+    ) -> Tensor:
+        batch_size = state.shape[0]
+        global_cond_feats = [state]
+        images_tensor = torch.stack(images, dim=0)  # (num_cameras, B, L, C, H, W)
+        n_obs_steps = images_tensor.shape[2]
+        
+        if self.config.image_features:
+            if self.config.use_separate_rgb_encoder_per_camera:
+                # Combine batch and sequence dims while rearranging to make the camera index dimension first.
+                images_per_camera = einops.rearrange(images_tensor, "n b s ... -> n (b s) ...")
+                img_features_list = torch.cat(
+                    [
+                        encoder(images)
+                        for encoder, images in zip(self.rgb_encoder, images_per_camera, strict=True)
+                    ]
+                )
+
+                # Separate batch and sequence dims back out. The camera index dim gets absorbed into the
+                # feature dim (effectively concatenating the camera features).
+                img_features = einops.rearrange(
+                    img_features_list, "(n b s) ... -> b s (n ...)", b=batch_size, s=n_obs_steps
+                )
+            else:
+                # Combine batch, sequence, and "which camera" dims before passing to shared encoder.
+                img_features = self.rgb_encoder(
+                    einops.rearrange(images_tensor, "n b s ... -> (b s n) ...")
+                )
+                # Separate batch dim and sequence dim back out. The camera index dim gets absorbed into the
+                # feature dim (effectively concatenating the camera features).
+                img_features = einops.rearrange(
+                    img_features, "(b s n) ... -> b s (n ...)", b=batch_size, s=n_obs_steps
+                )
+            global_cond_feats.append(img_features)
+            
+        return torch.cat(global_cond_feats, dim=-1)
+
+    def _select_sparse_cond(
+        self,
+        indices: Tensor,  # [B, N]
+        images: list[Tensor],  # List[[B, L, ...]]
+        img_masks: list[Tensor] | None = None,  # List[[B, L]]
+        lang_tokens: Tensor | None = None,  # [B, L, max_token_len]
+        lang_masks: Tensor | None = None,  # [B, L, max_token_len]
+        state: Tensor | None = None,  # [B, L, state_dim]
+    ):
+        selected_images = [
+            torch.gather(
+                img,
+                dim=1,
+                index=indices.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(-1, -1, *img.shape[2:]),
+            )
+            for img in images
+        ]
+        selected_img_masks = None
+        if img_masks is not None:
+            selected_img_masks = [
+                torch.gather(
+                    img_mask,
+                    dim=1,
+                    index=indices.expand(-1, -1),
+                )
+                for img_mask in img_masks
+            ]
+        selected_lang_tokens = None
+        if lang_tokens is not None:
+            selected_lang_tokens = torch.gather(
+                lang_tokens,
+                dim=1,
+                index=indices.unsqueeze(-1).expand(-1, -1, lang_tokens.shape[2]),
+            )
+        selected_lang_masks = None
+        if lang_masks is not None:
+            selected_lang_masks = torch.gather(
+                lang_masks,
+                dim=1,
+                index=indices.unsqueeze(-1).expand(-1, -1, lang_masks.shape[2]),
+            )
+        selected_state = None
+        if state is not None:
+            selected_state = torch.gather(
+                state,
+                dim=1,
+                index=indices.unsqueeze(-1).expand(-1, -1, state.shape[2]),
+            )
+        
+        return selected_images, selected_img_masks, selected_lang_tokens, selected_lang_masks, selected_state
+
+    def forward(self, observation, actions, noise=None, time=None) -> Tensor:
+        images, img_masks, lang_tokens, lang_masks, state = self._preprocess_observation(observation, train=True)
+        
+        if self.config.cond_sample_mode == "sparse":
+            global_cond_indices = torch.randint(
+                0, actions.shape[1],
+                (actions.shape[0], 1),
+                device=actions.device,
+            )
+            images, img_masks, lang_tokens, lang_masks, state = self._select_sparse_cond(
+                global_cond_indices,
+                images,
+                img_masks,
+                lang_tokens,
+                lang_masks,
+                state,
+            )
+        else:
+            global_cond_indices = None
+        
+        global_cond = self._prepare_global_conditioning(
+            images,
+            img_masks,
+            lang_tokens,
+            lang_masks,
+            state,
+        )
+        global_cond = global_cond.to(get_dtype_from_parameters(self.model))
+        trajectory = actions
+        
+        eps = torch.randn_like(trajectory) if noise is None else noise
+        timesteps = torch.randint(
+            low=0,
+            high=self.noise_scheduler.config.num_train_timesteps,
+            size=(trajectory.shape[0],),
+            device=trajectory.device,
+        ).long()
+        
+        noisy_trajectory = self.noise_scheduler.add_noise(trajectory, eps, timesteps)
+        if self.config.cond_sample_mode == "sparse":
+            pred, _ = self.model.forward_sparse(
+                noisy_trajectory,
+                timestep=timesteps[:, None].expand(-1, trajectory.shape[1]),
+                global_cond=global_cond,
+                global_cond_indices=global_cond_indices,
+            )
+        else:
+            pred, _ = self.model(
+                noisy_trajectory,
+                timestep=timesteps[:, None].expand(-1, trajectory.shape[1]),
+                global_cond=global_cond,
+            )
+        
+        if self.config.prediction_type == "epsilon":
+            target = eps
+        elif self.config.prediction_type == "sample":
+            target = trajectory
+        else:
+            raise ValueError(f"Unknown prediction type {self.config.prediction_type}")
+
+        loss = F.mse_loss(pred, target.to(get_dtype_from_parameters(self.model)), reduction="none")
+
+        return loss.mean()

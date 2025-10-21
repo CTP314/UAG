@@ -85,3 +85,17 @@ class ModelTransformFactory(GroupFactory):
                         _transforms.PadStatesAndActions(model_config.action_dim),
                     ],
                 )
+            case _model.ModelType.UAG:
+                from openpi.models_pytorch import uag_config
+                assert isinstance(model_config, uag_config.UAGConfig)
+                image_shape = model_config.crop_shape if model_config.crop_shape is not None else (224, 224)
+                return _transforms.Group(
+                    inputs=[
+                        _transforms.InjectDefaultPrompt(self.default_prompt),
+                        _transforms.ResizeImages(*image_shape),
+                        _transforms.TokenizePrompt(
+                            _tokenizer.DummyTokenizer(model_config.max_token_len),
+                        ),
+                        _transforms.PadStatesAndActions(model_config.action_dim),
+                    ],
+                )

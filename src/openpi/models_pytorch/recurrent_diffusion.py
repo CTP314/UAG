@@ -70,10 +70,10 @@ class GatedDeltaNetForRecurrentDiffusion(GatedDeltaNetPreTrainedModel):
     
     def forward(
         self,
-        x: Tensor,
-        timestep: Tensor,
-        global_cond: Tensor | None = None,
-        global_cond_mask: Tensor | None = None, 
+        x: Tensor, # [B, L, input_dim]
+        timestep: Tensor, # [B, L]
+        global_cond: Tensor | None = None, # [B, L, global_cond_dim]
+        global_cond_mask: Tensor | None = None,  # [B, L]
         *,
         attention_mask: Tensor | None = None,
         past_key_values: Cache | List[torch.FloatTensor] | None = None,
@@ -96,22 +96,30 @@ class GatedDeltaNetForRecurrentDiffusion(GatedDeltaNetPreTrainedModel):
             global_cond_mask = global_cond_mask.unsqueeze(-1).to(hidden_states.dtype)
         
         for layer in self.layers:
-            hidden_states_uncond_input = torch.cat([
-                hidden_states,
-                timesteps_emb
-            ], dim=-1)
-            hidden_states_uncond_output = self.hidden_uncond_proj(hidden_states_uncond_input)
-            if global_cond is not None:
-                assert global_cond_mask is not None, "global_cond_mask must be provided when global_cond is used"
+            if global_cond_mask is None and global_cond is not None:
                 hidden_states_cond_input = torch.cat([
                     hidden_states,
                     timesteps_emb,
                     global_cond
                 ], dim=-1)
-                hidden_states_cond_output = self.hidden_cond_proj(hidden_states_cond_input)
-                hidden_states = global_cond_mask * hidden_states_cond_output + (1 - global_cond_mask) * hidden_states_uncond_output
+                hidden_states = self.hidden_cond_proj(hidden_states_cond_input)
             else:
-                hidden_states = hidden_states_uncond_output
+                hidden_states_uncond_input = torch.cat([
+                    hidden_states,
+                    timesteps_emb
+                ], dim=-1)
+                hidden_states_uncond_output = self.hidden_uncond_proj(hidden_states_uncond_input)
+                if global_cond is not None:
+                    assert global_cond_mask is not None, "global_cond_mask must be provided when global_cond is used"
+                    hidden_states_cond_input = torch.cat([
+                        hidden_states,
+                        timesteps_emb,
+                        global_cond
+                    ], dim=-1)
+                    hidden_states_cond_output = self.hidden_cond_proj(hidden_states_cond_input)
+                    hidden_states = global_cond_mask * hidden_states_cond_output + (1 - global_cond_mask) * hidden_states_uncond_output
+                else:
+                    hidden_states = hidden_states_uncond_output
 
             hidden_states, attentions, past_key_values = layer(
                 hidden_states,
@@ -123,4 +131,69 @@ class GatedDeltaNetForRecurrentDiffusion(GatedDeltaNetPreTrainedModel):
         hidden_states = self.norm(hidden_states)
         output = self.output_head(hidden_states)
         
+        return output, past_key_values
+    
+    def forward_sparse(
+        self,
+        x: Tensor, # [B, L, input_dim]
+        timestep: Tensor, # [B, L]
+        global_cond: Tensor | None = None, # [B, N, global_cond_dim]
+        global_cond_indices: Tensor | None = None, # [B, N]
+        *,
+        attention_mask: Tensor | None = None,
+        past_key_values: Cache | List[torch.FloatTensor] | None = None,
+        use_cache: bool | None = None,
+    ):
+        use_cache = use_cache if use_cache is not None else (self.config.use_cache if not self.training else False)
+        
+        timesteps_emb = self.diffusion_step_encoder(timestep)
+        hidden_states = self.input_proj(x)  # (batch_size, seq_len, hidden_size)
+        
+        B, L, H = hidden_states.shape
+        _, _, H_t = timesteps_emb.shape
+
+        if use_cache and not isinstance(past_key_values, Cache):
+            past_key_values = Cache.from_legacy_cache(past_key_values)
+            
+        for layer in self.layers:
+            hidden_states_uncond_input = torch.cat([
+                hidden_states,
+                timesteps_emb
+            ], dim=-1)
+            hidden_states_uncond_output = self.hidden_uncond_proj(hidden_states_uncond_input)
+            
+            if global_cond is not None:
+                assert global_cond_indices is not None, "global_cond_indices must be provided when global_cond is used"
+                indices_h = global_cond_indices.unsqueeze(-1).expand(-1, -1, H)  # (B, N, H)
+                indices_t = global_cond_indices.unsqueeze(-1).expand(-1, -1, H_t)  # (B, N, H_t)
+
+                cond_hidden_states = torch.gather(hidden_states, 1, indices_h)  # (B, N, global_cond_dim)
+                cond_timesteps_emb = torch.gather(timesteps_emb, 1, indices_t)  # (B, N, diffusion_step_embed_dim)
+                
+                hidden_states_cond_input = torch.cat([
+                    cond_hidden_states,
+                    cond_timesteps_emb,
+                    global_cond
+                ], dim=-1)
+
+                hidden_states_cond_output = self.hidden_cond_proj(hidden_states_cond_input)
+                
+                hidden_states = torch.scatter(
+                    hidden_states,
+                    1,
+                    indices_h,
+                    hidden_states_cond_output,
+                )
+            else:
+                hidden_states = hidden_states_uncond_output
+                
+            hidden_states, attentions, past_key_values = layer(
+                hidden_states,
+                attention_mask=attention_mask,
+                past_key_values=past_key_values,
+                use_cache=use_cache,
+            )
+            
+        hidden_states = self.norm(hidden_states)
+        output = self.output_head(hidden_states)
         return output, past_key_values

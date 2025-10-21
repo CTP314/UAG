@@ -378,6 +378,7 @@ from openpi.policies import pusht_policy
 
 @dataclasses.dataclass(frozen=True)
 class LeRobotPushTDataConfig(DataConfigFactory):
+    action_sequence_keys: Sequence[str] = ("action",)
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         repack_transform = _transforms.Group(
@@ -405,5 +406,5 @@ class LeRobotPushTDataConfig(DataConfigFactory):
             repack_transforms=repack_transform,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
-            action_sequence_keys=("action",),
+            action_sequence_keys=self.action_sequence_keys,
         )

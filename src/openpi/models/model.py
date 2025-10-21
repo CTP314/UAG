@@ -95,7 +95,6 @@ class Observation(Generic[ArrayT]):
     image_masks: dict[str, at.Bool[ArrayT, "*b"]]
     # Low-dimensional robot state.
     state: at.Float[ArrayT, "*b s"]
-
     # Tokenized prompt.
     tokenized_prompt: at.Int[ArrayT, "*b l"] | None = None
     # Tokenized prompt mask.
@@ -119,7 +118,7 @@ class Observation(Generic[ArrayT]):
             if data["image"][key].dtype == np.uint8:
                 data["image"][key] = data["image"][key].astype(np.float32) / 255.0 * 2.0 - 1.0
             elif hasattr(data["image"][key], "dtype") and data["image"][key].dtype == torch.uint8:
-                data["image"][key] = data["image"][key].to(torch.float32).permute(0, 3, 1, 2) / 255.0 * 2.0 - 1.0
+                data["image"][key] = torch.movedim(data["image"][key].to(torch.float32), -1, -3) / 255.0 * 2.0 - 1.0
         return cls(
             images=data["image"],
             image_masks=data["image_mask"],

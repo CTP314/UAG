@@ -17,6 +17,7 @@ import openpi.models.model as _model
 import openpi.models.pi0_config as pi0_config
 import openpi.models.pi0_fast as pi0_fast
 import openpi.models_pytorch.diffusion_config as diffusion_config
+import openpi.models_pytorch.uag_config as uag_config
 import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
@@ -504,6 +505,25 @@ _CONFIGS = [
         model=diffusion_config.DiffusionConfig(),
         data=LeRobotPushTDataConfig(
             repo_id="lerobot/pusht",
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+        ),
+        batch_size=64,
+        num_train_steps=200_000,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=800,
+            peak_lr=1e-4,
+            decay_steps=200_000,
+            decay_lr=0,
+        ),
+    ),
+    TrainConfig(
+        name="uag_pusht",
+        model=uag_config.UAGConfig(),
+        data=LeRobotPushTDataConfig(
+            repo_id="lerobot/pusht",
+            action_sequence_keys=("action", "observation.state", "observation.image"),
             base_config=DataConfig(
                 prompt_from_task=True,
             ),

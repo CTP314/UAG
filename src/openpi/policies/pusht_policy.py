@@ -12,7 +12,7 @@ def _parse_image(image) -> np.ndarray:
         image = (255 * image).astype(np.uint8)
     if image.shape[0] == 3:
         image = einops.rearrange(image, "c h w -> h w c")
-    if len(image.shape) == 4 and image.shape[0] == 3:
+    if len(image.shape) == 4 and image.shape[1] == 3:
         image = einops.rearrange(image, "b c h w -> b h w c")
     return image
 
@@ -24,10 +24,16 @@ class PushTInputs(transforms.DataTransformFn):
     
     def __call__(self, data: dict) -> dict:
         base_image = _parse_image(data["observation/image"])
-        
+        state = data["observation/state"]
+        has_expanded = False
+        if len(base_image.shape) == 3:
+            base_image = np.expand_dims(base_image, axis=0)
+            state = np.expand_dims(state, axis=0)
+            has_expanded = True
+            
         empty_image_mask = np.True_ if self.model_type == _model.ModelType.PI0_FAST else np.False_
         inputs = {
-            "state": np.asarray(data["observation/state"]).astype(np.float32),
+            "state": np.asarray(state).astype(np.float32),
             "image": {
                 "base_0_rgb": base_image,
                 "left_wrist_0_rgb": np.zeros_like(base_image),  # Placeholder for missing left wrist image
@@ -35,9 +41,9 @@ class PushTInputs(transforms.DataTransformFn):
             },
             "prompt": data["prompt"],
             "image_mask": {
-                "base_0_rgb": np.True_,
-                "left_wrist_0_rgb": empty_image_mask,
-                "right_wrist_0_rgb": empty_image_mask,
+                "base_0_rgb": np.ones(base_image.shape[0], dtype=bool),
+                "left_wrist_0_rgb": np.full(base_image.shape[0], empty_image_mask, dtype=bool),
+                "right_wrist_0_rgb": np.full(base_image.shape[0], empty_image_mask, dtype=bool),
             }
         }
         
@@ -46,6 +52,14 @@ class PushTInputs(transforms.DataTransformFn):
             
         if "prompt" in data:
             inputs["prompt"] = data["prompt"]
+            
+        if has_expanded:
+            for key in inputs:
+                if isinstance(inputs[key], dict):
+                    for subkey in inputs[key]:
+                        inputs[key][subkey] = np.squeeze(inputs[key][subkey], axis=0)
+                else:
+                    inputs[key] = np.squeeze(inputs[key], axis=0)
             
         return inputs
     

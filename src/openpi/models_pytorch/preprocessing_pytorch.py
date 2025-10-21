@@ -37,6 +37,9 @@ def preprocess_observation_pytorch(
     for key in image_keys:
         image = observation.images[key]
 
+        image_batch_shape = image.shape[:-3]
+        image = image.reshape(-1, *image.shape[-3:])  # Merge batch dimensions
+
         # TODO: This is a hack to handle both [B, C, H, W] and [B, H, W, C] formats
         # Handle both [B, C, H, W] and [B, H, W, C] formats
         is_channels_first = image.shape[1] == 3  # Check if channels are in dimension 1
@@ -144,6 +147,9 @@ def preprocess_observation_pytorch(
         # Convert back to [B, C, H, W] format if it was originally channels-first
         if is_channels_first:
             image = image.permute(0, 3, 1, 2)  # [B, H, W, C] -> [B, C, H, W]
+
+        # Restore original batch shape
+        image = image.reshape(*image_batch_shape, *image.shape[1:])
 
         out_images[key] = image
 
