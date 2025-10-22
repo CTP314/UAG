@@ -49,7 +49,7 @@ class UAGPolicy(nn.Module):
         
         gated_deltanet_config = GatedDeltaNetConfig(
             num_hidden_layers=config.num_hidden_layers,
-            num_attention_heads=config.num_heads,
+            num_heads=config.num_heads,
             head_dim=config.head_dim,
             hidden_size=config.hidden_size,
         )
@@ -230,14 +230,14 @@ class UAGPolicy(nn.Module):
         
         noisy_trajectory = self.noise_scheduler.add_noise(trajectory, eps, timesteps)
         if self.config.cond_sample_mode == "sparse":
-            pred, _ = self.model.forward_sparse(
+            pred, _ = self.model(
                 noisy_trajectory,
                 timestep=timesteps[:, None].expand(-1, trajectory.shape[1]),
                 global_cond=global_cond,
                 global_cond_indices=global_cond_indices,
             )
         else:
-            pred, _ = self.model(
+            pred, _ = self.model.foward_dense(
                 noisy_trajectory,
                 timestep=timesteps[:, None].expand(-1, trajectory.shape[1]),
                 global_cond=global_cond,
@@ -296,7 +296,7 @@ class UAGPolicy(nn.Module):
         sample = noisy_actions
         self.noise_scheduler.set_timesteps(self.num_inference_steps)
         for t in self.noise_scheduler.timesteps:
-            model_output, _ = self.model.forward_sparse(
+            model_output, _ = self.model(
                 sample,
                 torch.full(sample.shape[:2], t, device=sample.device, dtype=torch.long),
                 global_cond=global_cond,

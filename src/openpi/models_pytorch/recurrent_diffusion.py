@@ -87,7 +87,7 @@ class GatedDeltaNetForRecurrentDiffusion(GatedDeltaNetPreTrainedModel):
             DiffusionMLP(diffusion_step_embed_dim, diffusion_step_embed_dim),
         )
     
-    def forward(
+    def forward_dense(
         self,
         x: Tensor, # [B, L, input_dim]
         timestep: Tensor, # [B, L]
@@ -152,7 +152,7 @@ class GatedDeltaNetForRecurrentDiffusion(GatedDeltaNetPreTrainedModel):
         
         return output, past_key_values
     
-    def forward_sparse(
+    def forward(
         self,
         x: Tensor, # [B, L, input_dim]
         timestep: Tensor, # [B, L]

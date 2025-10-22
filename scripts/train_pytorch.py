@@ -379,7 +379,10 @@ def train_loop(config: _config.TrainConfig):
         for i in range(min(5, batch_size)):
             # Concatenate all camera views horizontally for this batch item
             # Convert from NCHW to NHWC format for wandb
-            img_concatenated = torch.cat([img[i].permute(1, 2, 0) for img in sample_batch["image"].values()], axis=1)
+            img_concatenated = torch.cat([
+                img[i].permute(1, 2, 0) if len(img[i].shape) == 3 else img[i, 0].permute(1, 2, 0)
+                for img in sample_batch["image"].values()
+            ], axis=1)
             img_concatenated = img_concatenated.cpu().numpy()
             images_to_log.append(wandb.Image(img_concatenated))
 
@@ -421,7 +424,7 @@ def train_loop(config: _config.TrainConfig):
     else:
         model = openpi.models_pytorch.pi0_pytorch.PI0Pytorch(model_cfg).to(device)
 
-    if hasattr(model, "gradient_checkpointing_enable"):
+    if getattr(model, "gradient_checkpointing", False):
         enable_gradient_checkpointing = True
         model.gradient_checkpointing_enable()
         logging.info("Enabled gradient checkpointing for memory optimization")
