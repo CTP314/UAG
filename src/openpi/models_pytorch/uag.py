@@ -11,7 +11,7 @@ from lerobot.common.policies.diffusion.modeling_diffusion import (
 import openpi.models_pytorch.preprocessing_pytorch as _preprocessing
 
 from openpi.models_pytorch.encoder import DiffusionRgbEncoder
-from openpi.models_pytorch.recurrent_diffusion import GatedDeltaNetForRecurrentDiffusion, GatedDeltaNetConfig
+from openpi.models_pytorch import recurrent_diffusion
 
 def get_dtype_from_parameters(module: nn.Module) -> torch.dtype:
     """Get a module's parameter dtype by checking one of its parameters.
@@ -47,19 +47,27 @@ class UAGPolicy(nn.Module):
                 )
                 global_cond_dim += self.rgb_encoder.feature_dim * num_images
         
-        gated_deltanet_config = GatedDeltaNetConfig(
+        gated_deltanet_config = recurrent_diffusion.GatedDeltaNetConfig(
             num_hidden_layers=config.num_hidden_layers,
             num_heads=config.num_heads,
             head_dim=config.head_dim,
             hidden_size=config.hidden_size,
         )
-        self.model = GatedDeltaNetForRecurrentDiffusion(
-            gated_deltanet_config,
-            input_dim=config.action_dim,
-            diffusion_step_embed_dim=config.diffusion_step_embed_dim,
-            global_cond_dim=global_cond_dim,
-            use_linear_cond_proj=config.use_linear_cond_proj,
-        )
+        if config.use_film:
+            self.model = recurrent_diffusion.GatedDeltaNetForRecurrentDiffusionFiLM(
+                gated_deltanet_config,
+                input_dim=config.action_dim,
+                diffusion_step_embed_dim=config.diffusion_step_embed_dim,
+                global_cond_dim=global_cond_dim,
+            )
+        else:
+            self.model = recurrent_diffusion.GatedDeltaNetForRecurrentDiffusion(
+                gated_deltanet_config,
+                input_dim=config.action_dim,
+                diffusion_step_embed_dim=config.diffusion_step_embed_dim,
+                global_cond_dim=global_cond_dim,
+                use_linear_cond_proj=config.use_linear_cond_proj,
+            )
         if self.config.dtype == "bfloat16":
             self.model.to(dtype=torch.bfloat16)
         
@@ -106,13 +114,13 @@ class UAGPolicy(nn.Module):
         lang_masks,
         state,
     ) -> Tensor:
-        batch_size = state.shape[0]
+        
         global_cond_feats = [state]
         images_tensor = torch.stack(images, dim=0)  # (num_cameras, B, C, H, W)
         
-        image_tensor_bath_shape = images_tensor.shape[1:-3]
+        image_tensor_batch_shape = images_tensor.shape[1:-3]
         images_tensor = images_tensor.reshape((images_tensor.shape[0], -1, *images_tensor.shape[-3:]))
-
+        batch_size = images_tensor.shape[1]
         if self.config.image_features:
             if self.config.use_separate_rgb_encoder_per_camera:
                 images_per_camera = images_tensor
@@ -135,7 +143,7 @@ class UAGPolicy(nn.Module):
                 img_features = einops.rearrange(
                     img_features, "(b n) ... -> b (n ...)", b=batch_size
                 )
-            global_cond_feats.append(img_features.reshape((*image_tensor_bath_shape, -1)))
+            global_cond_feats.append(img_features.reshape((*image_tensor_batch_shape, -1)))
             
         return torch.cat(global_cond_feats, dim=-1)
 
@@ -194,11 +202,18 @@ class UAGPolicy(nn.Module):
         images, img_masks, lang_tokens, lang_masks, state = self._preprocess_observation(observation, train=True)
         
         if self.config.cond_sample_mode == "sparse":
-            global_cond_indices = torch.randint(
-                0, min(actions.shape[1], self.config.max_cond_offset + 1),
-                (actions.shape[0], 1),
-                device=actions.device,
-            )
+            if self.config.cond_inject_idx is None:
+                global_cond_indices = torch.randint(
+                    0, min(actions.shape[1], self.config.max_cond_offset + 1) if self.config.max_cond_offset is not None else actions.shape[1],
+                    (actions.shape[0], 1),
+                    device=actions.device,
+                )
+            else:
+                global_cond_indices = self.config.cond_inject_idx * torch.ones(
+                    (actions.shape[0], 1),
+                    device=actions.device,
+                    dtype=torch.long,
+                )
             images, img_masks, lang_tokens, lang_masks, state = self._select_sparse_cond(
                 global_cond_indices,
                 images,
@@ -236,8 +251,20 @@ class UAGPolicy(nn.Module):
                 global_cond=global_cond,
                 global_cond_indices=global_cond_indices,
             )
-        else:
-            pred, _ = self.model.foward_dense(
+        elif self.config.cond_sample_mode == "full_rand":
+            global_cond_mask = torch.randint(
+                0, 2,
+                (global_cond.shape[0], global_cond.shape[1]),
+                device=global_cond.device,
+            ).bool()
+            pred, _ = self.model.forward_dense(
+                noisy_trajectory,
+                timestep=timesteps[:, None].expand(-1, trajectory.shape[1]),
+                global_cond=global_cond,
+                global_cond_mask=global_cond_mask,
+            )
+        elif self.config.cond_sample_mode == "full":
+            pred, _ = self.model.forward_dense(
                 noisy_trajectory,
                 timestep=timesteps[:, None].expand(-1, trajectory.shape[1]),
                 global_cond=global_cond,

@@ -538,6 +538,17 @@ _CONFIGS = [
         ),
         save_interval=10_000,
     ),
+    TrainConfig(
+        name="uag_film_pusht",
+        model=uag_config.UAGConfig(use_film=True),
+        data=LeRobotPushTDataConfig(
+            repo_id="lerobot/pusht",
+            action_sequence_keys=("action", "observation.state", "observation.image"),
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+        ),
+    ),
     #
     # ALOHA Sim configs. This config is used to demonstrate how to train on a simple simulated environment.
     #

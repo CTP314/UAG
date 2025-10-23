@@ -27,15 +27,12 @@ class UAGConfig(_model.BaseModelConfig):
         "base_0_rgb",
     )
     
-    # num_hidden_layers: int = 18
-    # num_heads: int = 4
-    # head_dim: int = 256
-    # hidden_size: int = 1024
     num_hidden_layers: int = 12
     num_heads: int = 4
     head_dim: int = 128
     hidden_size: int = 1024
     use_linear_cond_proj: bool = True
+    use_film: bool = False
     
     diffusion_step_embed_dim: int = 128
     
@@ -53,8 +50,9 @@ class UAGConfig(_model.BaseModelConfig):
     num_inference_steps: int | None = None
 
     # Training Strategy
-    cond_sample_mode: str = "sparse"  # "full" or "sparse"
-    max_cond_offset: int = 0 # only used if cond_sample_mode is "sparse"
+    cond_sample_mode: str = "sparse"  # "full_rand" or "sparse"
+    max_cond_offset: int | None = None  # only used if cond_sample_mode is "sparse"
+    cond_inject_idx: int | None = None  # only used if cond_sample_mode is "sparse"
 
     @property
     @override

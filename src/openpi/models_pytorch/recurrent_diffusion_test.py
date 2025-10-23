@@ -27,7 +27,7 @@ def test_recurrent_diffusion_inference_speed(
         start_time = time.perf_counter()
         num_warmup_iters = 100
         for _ in range(num_warmup_iters):
-            _ = model.forward_sparse(
+            _ = model(
                 x,
                 timestep=diffusion_steps,
                 global_cond=global_cond_sparse,
@@ -41,7 +41,7 @@ def test_recurrent_diffusion_inference_speed(
         num_iters = 50
         start_time = time.perf_counter()
         for _ in range(num_iters):
-            _ = model.forward_sparse(
+            _ = model(
                 x,
                 timestep=diffusion_steps,
                 global_cond=global_cond_sparse,
@@ -56,7 +56,7 @@ def test_recurrent_diffusion_inference_speed(
         start_time = time.perf_counter()
         num_iters = 50
         for _ in range(num_iters):
-            _ = model(
+            _ = model.forward_dense(
                 x,
                 timestep=diffusion_steps,
                 global_cond=global_cond,
@@ -67,27 +67,6 @@ def test_recurrent_diffusion_inference_speed(
         avg_time_per_iter = total_time / num_iters
         print(f"Average inference time per iteration: {avg_time_per_iter * 1000:.2f} ms")
         
-        # # Measure recurrent inference time
-        # start_time = time.perf_counter()
-        # for _ in range(num_iters):
-        #     past_key_values = None
-        #     for t in range(L):
-        #         xt = x[:, t:t+1, :]
-        #         diffusion_stept = diffusion_steps[:, t:t+1]
-        #         global_condt = global_cond[:, t:t+1, :] if global_cond is not None else None
-        #         global_cond_maskt = global_cond_mask[:, t:t+1] if global_cond_mask is not None else None
-        #         out, past_key_values = model(
-        #             xt,
-        #             timestep=diffusion_stept,
-        #             global_cond=global_condt,
-        #             global_cond_mask=global_cond_maskt,
-        #             past_key_values=past_key_values,
-        #         )
-        # end_time = time.perf_counter()
-        # total_time = end_time - start_time
-        # avg_time_per_iter = total_time / num_iters
-        # print(f"Average recurrent inference time per iteration: {avg_time_per_iter * 1000:.2f} ms")
-
 def test_recurrent_diffusion():
     config = GatedDeltaNetConfig(
         num_hidden_layers=3,
@@ -106,13 +85,42 @@ def test_recurrent_diffusion():
         input_dim=input_dim,
         diffusion_step_embed_dim=diffusion_step_embed_dim,
         global_cond_dim=global_cond_dim,
-    ).to(device=device, dtype=dtype)
+    )
+    model.to(device=device, dtype=dtype)
     # print model
     # print(model)
     # print number of parameters in Billions
     num_params = sum(p.numel() for p in model.parameters()) / 1e9
     print(f"Number of parameters: {num_params:.3f}B")
     
+    test_recurrent_diffusion_inference_speed(
+        model=model,
+        B=B,
+        L=L,
+        I=input_dim,
+        C=global_cond_dim,
+        device=device,
+        dtype=dtype,
+    )
+    
+def test_recurrent_diffusion_film():
+    config = GatedDeltaNetConfig(
+        num_hidden_layers=3,
+        num_heads=8,
+    )
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    dtype = torch.bfloat16
+    input_dim, diffusion_step_embed_dim, global_cond_dim = 32, 128, 128
+    model = _recurrent_diffusion.GatedDeltaNetForRecurrentDiffusionFiLM(
+        config=config,
+        input_dim=input_dim,
+        diffusion_step_embed_dim=diffusion_step_embed_dim,
+        global_cond_dim=global_cond_dim,
+    )
+    B, L = 1, 128
+    model.to(device=device, dtype=dtype)
+    # print model
+    # print(model)
     test_recurrent_diffusion_inference_speed(
         model=model,
         B=B,
@@ -197,3 +205,4 @@ def test_unet_diffusion():
 if __name__ == "__main__":
     # test_unet_diffusion()
     test_recurrent_diffusion()
+    test_recurrent_diffusion_film()

@@ -216,3 +216,168 @@ class GatedDeltaNetForRecurrentDiffusion(GatedDeltaNetPreTrainedModel):
         hidden_states = self.norm(hidden_states)
         output = self.output_head(hidden_states)
         return output, past_key_values
+    
+class GatedDeltaNetForRecurrentDiffusionFiLM(GatedDeltaNetPreTrainedModel):
+    def __init__(self, 
+        config: GatedDeltaNetConfig,
+        input_dim: int,
+        diffusion_step_embed_dim: int,
+        global_cond_dim: int = 0,
+    ):
+        super().__init__(config)
+        self.config = config
+        
+        self.diffusion_step_encoder = self.make_step_encoder(diffusion_step_embed_dim)
+        self.cond_dim = global_cond_dim + diffusion_step_embed_dim
+        self.uncond_dim = diffusion_step_embed_dim
+        self.input_proj = DiffusionMLP(input_dim, config.hidden_size)
+        
+        self.hidden_cond_projs = nn.ModuleList(
+            nn.Linear(self.cond_dim, config.hidden_size * 2)
+            for _ in range(config.num_hidden_layers)
+        )
+
+        self.hidden_uncond_projs = nn.ModuleList(
+            nn.Linear(self.uncond_dim, config.hidden_size * 2)
+            for _ in range(config.num_hidden_layers)
+        )
+
+        self.layers = nn.ModuleList([GatedDeltaNetBlock(config, layer_idx) for layer_idx in range(config.num_hidden_layers)])
+        
+        self.gradient_checkpointing = False
+        self.norm = (RMSNorm if config.fuse_norm else nn.RMSNorm)(config.hidden_size, eps=config.norm_eps)
+        self.output_head = nn.Linear(config.hidden_size, input_dim)
+        
+        self.post_init()
+        
+    def post_init(self):
+        super().post_init()
+        
+        # make sure nn.init.zeros_(self.dense.weight) for all cond_proj layers uncond_proj layers
+        for cond_proj in self.hidden_cond_projs:
+            nn.init.zeros_(cond_proj.weight)
+
+        for uncond_proj in self.hidden_uncond_projs:
+            nn.init.zeros_(uncond_proj.weight)
+
+    def make_step_encoder(self, diffusion_step_embed_dim: int) -> nn.Module:
+        return nn.Sequential(
+            DiffusionSinusoidalPosEmb(diffusion_step_embed_dim),
+            DiffusionMLP(diffusion_step_embed_dim, diffusion_step_embed_dim),
+        )
+    
+    def forward_dense(
+        self,
+        x: Tensor, # [B, L, input_dim]
+        timestep: Tensor, # [B, L]
+        global_cond: Tensor | None = None, # [B, L, global_cond_dim]
+        global_cond_mask: Tensor | None = None,  # [B, L]
+        *,
+        attention_mask: Tensor | None = None,
+        past_key_values: Cache | List[torch.FloatTensor] | None = None,
+        use_cache: bool | None = None,
+    ):
+        use_cache = use_cache if use_cache is not None else (self.config.use_cache if not self.training else False)
+        
+        # x: (batch_size, seq_len, input_dim)
+        # timestep: (batch_size, seq_len)
+        # global_cond: (batch_size, seq_len, global_cond_dim)
+        # global_cond_mask: (batch_size, seq_len)
+
+        timesteps_emb = self.diffusion_step_encoder(timestep)
+        hidden_states = self.input_proj(x)  # (batch_size, seq_len, hidden_size)
+
+        if use_cache and not isinstance(past_key_values, Cache):
+            past_key_values = Cache.from_legacy_cache(past_key_values)
+        
+        if global_cond_mask is not None:
+            global_cond_mask = global_cond_mask.unsqueeze(-1).to(hidden_states.dtype)
+
+        for layer_idx, layer in enumerate(self.layers):
+            if global_cond_mask is None and global_cond is not None:
+                cond_proj_out = self.hidden_cond_projs[layer_idx](torch.cat([timesteps_emb, global_cond], dim=-1))
+                scale, shift = cond_proj_out.chunk(2, dim=-1)
+                hidden_states = hidden_states * (1 + scale) + shift
+            else:
+                uncond_proj_out = self.hidden_uncond_projs[layer_idx](timesteps_emb)
+                scale, shift = uncond_proj_out.chunk(2, dim=-1)
+                hidden_states_uncond = hidden_states * (1 + scale) + shift
+                if global_cond is not None:
+                    assert global_cond_mask is not None, "global_cond_mask must be provided when global_cond is used"
+                    cond_proj_out = self.hidden_cond_projs[layer_idx](torch.cat([timesteps_emb, global_cond], dim=-1))
+                    scale_c, shift_c = cond_proj_out.chunk(2, dim=-1)
+                    hidden_states_cond = hidden_states * (1 + scale_c) + shift_c
+                    hidden_states = global_cond_mask * hidden_states_cond + (1 - global_cond_mask) * hidden_states_uncond
+                else:
+                    hidden_states = hidden_states_uncond
+
+            hidden_states, attentions, past_key_values = layer(
+                hidden_states,
+                attention_mask=attention_mask,
+                past_key_values=past_key_values,
+                use_cache=use_cache,
+            )
+            
+        hidden_states = self.norm(hidden_states)
+        output = self.output_head(hidden_states)
+        
+        return output, past_key_values
+    
+    def forward(
+        self,
+        x: Tensor, # [B, L, input_dim]
+        timestep: Tensor, # [B, L]
+        global_cond: Tensor | None = None, # [B, N, global_cond_dim]
+        global_cond_indices: Tensor | None = None, # [B, N]
+        *,
+        attention_mask: Tensor | None = None,
+        past_key_values: Cache | List[torch.FloatTensor] | None = None,
+        use_cache: bool | None = None,
+    ):
+        use_cache = use_cache if use_cache is not None else (self.config.use_cache if not self.training else False)
+        
+        timesteps_emb = self.diffusion_step_encoder(timestep)
+        hidden_states = self.input_proj(x)  # (batch_size, seq_len, hidden_size)
+        
+        B, L, H = hidden_states.shape
+        _, _, H_t = timesteps_emb.shape
+
+        if use_cache and not isinstance(past_key_values, Cache):
+            past_key_values = Cache.from_legacy_cache(past_key_values)
+            
+        for layer_idx, layer in enumerate(self.layers):
+            uncond_proj_out = self.hidden_uncond_projs[layer_idx](timesteps_emb)
+            scale, shift = uncond_proj_out.chunk(2, dim=-1)
+            hidden_states_uncond = hidden_states * (1 + scale) + shift
+            
+            if global_cond is not None:
+                assert global_cond_indices is not None, "global_cond_indices must be provided when global_cond is used"
+                indices_h = global_cond_indices.unsqueeze(-1).expand(-1, -1, H)  # (B, N, H)
+                indices_t = global_cond_indices.unsqueeze(-1).expand(-1, -1, H_t)  # (B, N, H_t)
+
+                cond_hidden_states = torch.gather(hidden_states, 1, indices_h)  # (B, N, global_cond_dim)
+                cond_timesteps_emb = torch.gather(timesteps_emb, 1, indices_t)  # (B, N, diffusion_step_embed_dim)
+                
+                cond_proj_out = self.hidden_cond_projs[layer_idx](torch.cat([cond_timesteps_emb, global_cond], dim=-1))
+                scale_c, shift_c = cond_proj_out.chunk(2, dim=-1)
+                hidden_states_cond = cond_hidden_states * (1 + scale_c) + shift_c
+                
+                hidden_states = torch.scatter(
+                    hidden_states_uncond,
+                    1,
+                    indices_h,
+                    hidden_states_cond,
+                )
+            else:
+                hidden_states = hidden_states_uncond
+                
+            hidden_states, attentions, past_key_values = layer(
+                hidden_states,
+                attention_mask=attention_mask,
+                past_key_values=past_key_values,
+                use_cache=use_cache,
+            )
+
+        hidden_states = self.norm(hidden_states)
+        output = self.output_head(hidden_states)
+        return output, past_key_values
